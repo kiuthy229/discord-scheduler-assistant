@@ -1,9 +1,9 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { config } from 'dotenv';
 import { getVoiceConnection } from '@discordjs/voice';
-import { handleVoiceStateUpdate } from './services/whisper';
+import { handleVoiceStateUpdate, setDiscordClient, handleTextMessage, clearConversationContext, processScheduleImage } from './services/whisper';
 import ffmpeg from 'fluent-ffmpeg';
-import { getOptimalMeetingTimes } from './services/gpt';
+import { getOptimalMeetingTimes } from './services/gpt-text-completions';
 
 // Set the path to the ffmpeg binary
 ffmpeg.setFfmpegPath('/opt/homebrew/bin/ffmpeg');
@@ -22,12 +22,46 @@ const client = new Client({
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user?.tag}`);
+  // Set the Discord client reference for the whisper service
+  setDiscordClient(client);
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+
+  // Handle schedule image processing
+  if (message.attachments.size > 0) {
+    const attachment = message.attachments.first();
+    if (attachment && attachment.contentType?.startsWith('image/')) {
+      console.log(`📸 Processing schedule image from ${message.author.id}`);
+      const updatedContext = await processScheduleImage(message.author.id, attachment.url, message.guild?.id);
+      if (updatedContext) {
+        console.log(`✅ Schedule image processed and context updated for ${message.author.id}`);
+        console.log(`📊 Updated context:`, updatedContext);
+      }
+      return;
+    }
+  }
+
+  // Handle voice conversation text responses
+  if (message.content.toLowerCase().startsWith('#voice')) {
+    const textInput = message.content.substring(6).trim(); // Remove '#voice ' prefix
+    if (textInput) {
+      await handleTextMessage(message.author.id, textInput, message.guild?.id);
+    } else {
+      await message.channel.send('💬 Please provide your response after #voice (e.g., #voice I prefer afternoon meetings)');
+    }
+    return;
+  }
+
+  // Handle conversation reset
+  if (message.content.toLowerCase() === '#reset') {
+    clearConversationContext(message.author.id);
+    await message.channel.send('🔄 Conversation context cleared. Starting fresh!');
+    return;
+  }
 
   if (message.content.toLowerCase().startsWith('#schedule')) {
     const filter = (m: any) => m.author.id === message.author.id;
